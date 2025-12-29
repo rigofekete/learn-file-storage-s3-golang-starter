@@ -19,7 +19,7 @@ type apiConfig struct {
 	platform         string
 	filepathRoot     string
 	assetsRoot       string
-	s3Client				*s3.Client
+	s3Client         *s3.Client
 	s3Bucket         string
 	s3Region         string
 	s3CfDistribution string
@@ -100,8 +100,6 @@ func main() {
 	awsClient := s3.NewFromConfig(awsCfg)
 
 	cfg.s3Client = awsClient
-
-
 
 
 	err = cfg.ensureAssetsDir()
