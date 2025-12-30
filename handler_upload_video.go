@@ -4,14 +4,19 @@ import (
 	"fmt"
 	"net/http"
 	"mime"
-
+	"os"
+	"io"
+	"context"
+ 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/uuid"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 )
 
 func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request) {
 	const maxMemory = 1 << 30
-	fileReaderHandle := http.MaxBytesReader(w, r.Body, maxMemory)
+	r.Body = http.MaxBytesReader(w, r.Body, maxMemory)
 
 	videoIDString := r.PathValue("videoID")
 	videoID, err := uuid.Parse(videoIDString)
@@ -49,7 +54,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		respondWithError(w, http.StatusBadRequest, "error returning datat with form key", err)
 		return
 	}
-	defer file.Close
+	defer file.Close()
 
 	mediaType, _, err := mime.ParseMediaType(header.Header.Get("Content-Type"))
 	if err != nil {
@@ -57,20 +62,55 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if mediaType != "video/mp4" {
-		respondWithError(w, htttp.StatusBadRequest, "Invalid file type", nil)
+		respondWithError(w, http.StatusBadRequest, "Invalid file type", nil)
 		return
 	} 
+
+	tempFile, err := os.CreateTemp("", "tubely-upload.mp4")
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to create temp file", err)
+		return
+	}
+	defer os.Remove(tempFile.Name())
+	defer tempFile.Close()
+
+	if _, err = io.Copy(tempFile, file); err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error saving file", err)
+		return
+	}
+
+	_, err = tempFile.Seek(0, io.SeekStart)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error reseting temp file pointer", err)
+		return
+	}
+
+	key := getAssetPath(mediaType)
+
+	s3InObj := s3.PutObjectInput{
+		Bucket: 	aws.String(cfg.s3Bucket),
+		Key: 		aws.String(key),
+		Body:		tempFile,
+		ContentType: 	aws.String(mediaType),
+	}
+		
+	_, err = cfg.s3Client.PutObject(
+		context.Background(), 
+		&s3InObj,  
+	)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error puttig object into S3", err)
+		return
+	}
+
+	url := cfg.getS3BucketURL(key)
+	video.VideoURL = &url
 	
-	 
-	
+	err = cfg.db.UpdateVideo(video)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error updating video in the database", err)
+		return
+	}
 
-
-
-	
-
-
-	
-	
-
-
+	respondWithJSON(w, http.StatusOK, video)
 }
