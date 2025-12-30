@@ -1,6 +1,6 @@
 out
 *.db
 .env
-Session.nvim
+Session.vim
 assets/
 samples/
