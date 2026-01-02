@@ -7,6 +7,11 @@ import (
 	"os"
 	"io"
 	"context"
+	"bytes"
+	"os/exec"
+	"encoding/json"
+	"errors"
+	"path"
  
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -79,13 +84,32 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+
 	_, err = tempFile.Seek(0, io.SeekStart)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Error reseting temp file pointer", err)
 		return
 	}
 
+
+	directory := ""
+	aspectRatio, err := getVideoAspectRatio(tempFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error getting aspect ratio of uploaded video: ", err)
+		return
+	}
+
+	switch aspectRatio {
+	case "16:9":
+		directory = "landscape/" 
+	case "9:16":
+		directory = "portrait/" 
+	default:
+		directory = "other/" 
+	}
+
 	key := getAssetPath(mediaType)
+	key = path.Join(directory, key)
 
 	s3InObj := s3.PutObjectInput{
 		Bucket: 	aws.String(cfg.s3Bucket),
@@ -113,4 +137,47 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	}
 
 	respondWithJSON(w, http.StatusOK, video)
+}
+
+func getVideoAspectRatio(filePath string) (string, error) {
+
+	cmd := exec.Command("ffprobe", "-v", 
+		"error", "-print_format", 
+		"json", "-show_streams", filePath,
+	)
+	
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout 
+
+	err := cmd.Run()
+	if err != nil {
+		return "", fmt.Errorf("ffprobe error: %v", err)
+	}
+
+	var output struct {
+		Streams []struct {
+			Width 	int `json:"width"`
+			Height 	int `json:"height"`
+		} `json:"streams"`
+	}
+	
+	err = json.Unmarshal(stdout.Bytes(), &output)
+	if err != nil {
+		return "", fmt.Errorf("could not parse ffprobe output: %v", err)
+	}
+
+	if len(output.Streams) == 0 {
+		return "", errors.New("no video stream found")
+
+	}
+
+	width := output.Streams[0].Width  
+	height := output.Streams[0].Height
+
+	if width == 16*height/9 {
+		return "16:9", nil
+	} else if height == 16*width/9 {
+		return "9:16", nil
+	}
+	return "other", nil
 }
